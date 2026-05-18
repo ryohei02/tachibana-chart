@@ -7,8 +7,6 @@ import streamlit as st
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-import json
-import requests
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -17,9 +15,9 @@ from datetime import datetime, timezone, timedelta
 from chart_utils import (
     setup_japanese_font, codes_input_ui,
     build_figure_6, fig_to_png, render_charts,
-    DEFAULT_CODES_18, last_business_days,
+    DEFAULT_CODES_18, last_business_days, normalize_df,
 )
-from tachibana_api import _next_p_no, _now_str
+from tachibana_api import _now_str, _post_raw
 from login_ui import require_login
 
 plt.rcParams["font.family"] = setup_japanese_font()
@@ -52,24 +50,14 @@ with col_b:
     st.info(f"基準日: **{base_date}**　|　直近60営業日分を表示")
 
 
-def _fetch_daily(url_price: str, code: str) -> pd.DataFrame | None:
-    """APIを直接呼んで日足DataFrameを返す（キャッシュなし）"""
-    params = {
-        "sCLMID":     "CLMMfdsGetMarketPriceHistory",
-        "sIssueCode": str(code).strip(),
-        "sSizyouC":   "00",
-        "p_no":       _next_p_no(),
-        "p_sd_date":  _now_str(),
-        "sJsonOfmt":  "5",
-    }
+def _fetch_daily(sess, code: str) -> pd.DataFrame | None:
+    """セッション経由で日足DataFrameを返す（キャッシュなし）"""
     try:
-        r = requests.post(
-            url_price,
-            data=json.dumps(params, ensure_ascii=False, separators=(",", ":")),
-            headers={"Content-Type": "application/json"},
-            timeout=20,
-        )
-        body = r.json()
+        body = sess.price({
+            "sCLMID":     "CLMMfdsGetMarketPriceHistory",
+            "sIssueCode": str(code).strip(),
+            "sSizyouC":   "00",
+        })
     except Exception as e:
         st.warning(f"{code}: 通信エラー {e}")
         return None
@@ -113,21 +101,17 @@ if st.button("📊 チャートを生成", type="primary", key="tb_daily_btn"):
     prog = st.progress(0, text="日足データ取得中...")
 
     for i, code in enumerate(codes):
-        df_raw = _fetch_daily(sess.url_price, code)
+        df_raw = _fetch_daily(sess, code)
 
         if df_raw is not None and len(df_raw) > 0:
             df_filtered = df_raw[df_raw["date"] <= base_dt].tail(80).copy()
             if len(df_filtered) > 0:
-                df_filtered = df_filtered.rename(columns={
-                    "date":   "t",
-                    "open":   "o",
-                    "high":   "h",
-                    "low":    "l",
-                    "close":  "c",
-                    "volume": "v",
-                })
+                # "date"列をインデックス用の"t"列として設定
+                df_filtered = df_filtered.rename(columns={"date": "t"})
                 df_filtered["t"] = pd.to_datetime(df_filtered["t"])
-                data_map[code] = df_filtered
+                # normalize_dfで列名を正規化（open→open, close→close等）
+                df_norm = normalize_df(df_filtered, is_daily=True)
+                data_map[code] = df_norm
             else:
                 data_map[code] = None
         else:
