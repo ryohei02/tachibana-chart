@@ -165,11 +165,14 @@ def login(user_id: str, password: str, base_url: str) -> tuple[TachibanaSession 
     """
     auth_url = base_url + "auth/"
     params = {
+        "p_no":      "1",
+        "p_sd_date": _now_str(),
         "sCLMID":    "CLMAuthLoginRequest",
         "sUserId":   user_id,
         "sPassword": password,
+        "sJsonOfmt": "5",
     }
-    resp = _post(auth_url, params)
+    resp = _post_raw(auth_url, params)
 
     errno = resp.get("p_errno", "-1")
     if errno != "0":
