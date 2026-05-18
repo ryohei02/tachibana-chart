@@ -69,7 +69,7 @@ if st.button("📊 チャートを生成", type="primary", key="tb_daily_btn"):
         from tachibana_api import _to_5digit, _now_str, _next_p_no
         _params = {
             "sCLMID": "CLMMfdsGetMarketPriceHistory",
-            "sIssueCode": _to_5digit(_debug_code),
+            "sIssueCode": str(_debug_code).strip(),
             "sSizyouC": "00",
             "p_no": "99",
             "p_sd_date": _now_str(),
