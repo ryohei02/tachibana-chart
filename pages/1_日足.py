@@ -7,7 +7,11 @@ import streamlit as st
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import json
+import requests
 import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
 from datetime import datetime, timezone, timedelta
 
 from chart_utils import (
@@ -15,13 +19,8 @@ from chart_utils import (
     build_figure_6, fig_to_png, render_charts,
     DEFAULT_CODES_18, last_business_days,
 )
-from tachibana_api import (
-    get_session, get_daily_history, get_issue_names_bulk, _to_4digit,
-)
+from tachibana_api import _next_p_no, _now_str
 from login_ui import require_login
-
-import pandas as pd
-import numpy as np
 
 plt.rcParams["font.family"] = setup_japanese_font()
 JST = timezone(timedelta(hours=9))
@@ -52,99 +51,73 @@ with col_a:
 with col_b:
     st.info(f"基準日: **{base_date}**　|　直近60営業日分を表示")
 
+
+def _fetch_daily(url_price: str, code: str) -> pd.DataFrame | None:
+    """APIを直接呼んで日足DataFrameを返す（キャッシュなし）"""
+    params = {
+        "sCLMID":     "CLMMfdsGetMarketPriceHistory",
+        "sIssueCode": str(code).strip(),
+        "sSizyouC":   "00",
+        "p_no":       _next_p_no(),
+        "p_sd_date":  _now_str(),
+        "sJsonOfmt":  "5",
+    }
+    try:
+        r = requests.post(
+            url_price,
+            data=json.dumps(params, ensure_ascii=False, separators=(",", ":")),
+            headers={"Content-Type": "application/json"},
+            timeout=20,
+        )
+        body = r.json()
+    except Exception as e:
+        st.warning(f"{code}: 通信エラー {e}")
+        return None
+
+    if body.get("p_errno", "-1") != "0":
+        st.warning(f"{code}: APIエラー {body.get('p_err', '')}")
+        return None
+
+    records = body.get("aCLMMfdsMarketPriceHistory", [])
+    if not records:
+        return None
+
+    rows = []
+    for rec in records:
+        try:
+            rows.append({
+                "date":   pd.to_datetime(rec["sDate"], format="%Y%m%d"),
+                "open":   float(rec["pDOP"]),
+                "high":   float(rec["pDHP"]),
+                "low":    float(rec["pDLP"]),
+                "close":  float(rec["pDPP"]),
+                "volume": float(rec["pDV"]),
+            })
+        except (KeyError, ValueError):
+            continue
+
+    if not rows:
+        return None
+
+    return pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+
+
 # ── 生成ボタン ────────────────────────────────────────────────
 if st.button("📊 チャートを生成", type="primary", key="tb_daily_btn"):
     if not codes:
         st.warning("銘柄コードを入力してください")
         st.stop()
 
-    # 日足データ取得
     data_map: dict = {}
+    base_dt = pd.to_datetime(base_date)
     prog = st.progress(0, text="日足データ取得中...")
 
-    # ── デバッグ: 1銘柄目のAPIレスポンスを表示 ──
-    _debug_code = codes[0] if codes else "69200"
-    with st.expander(f"🔍 デバッグ情報（{_debug_code}）", expanded=True):
-        import json, urllib.parse
-        from tachibana_api import _to_5digit, _now_str, _next_p_no
-        import requests as _req
-        _pno = _next_p_no()
-        _params = {
-            "sCLMID": "CLMMfdsGetMarketPriceHistory",
-            "sIssueCode": str(_debug_code).strip(),
-            "sSizyouC": "00",
-            "p_no": _pno,
-            "p_sd_date": _now_str(),
-            "sJsonOfmt": "5",
-        }
-        _r = _req.post(sess.url_price,
-                       data=json.dumps(_params, ensure_ascii=False, separators=(",",":")),
-                       headers={"Content-Type": "application/json"}, timeout=20)
-        st.write(f"URL: `{sess.url_price}`")
-        st.write(f"ステータス: {_r.status_code}")
-        try:
-            _body = _r.json()
-            _records = _body.get("aCLMMfdsMarketPriceHistory", [])
-            st.write(f"p_errno: {_body.get('p_errno')}  /  レコード件数: {len(_records)}")
-            if _records:
-                st.write("最新3件:", _records[-3:])
-            else:
-                st.json(_body)
-        except:
-            st.text(_r.text[:500])
-
     for i, code in enumerate(codes):
-        with st.spinner(f"{code} 取得中..."):
-            # キャッシュをバイパスして直接取得
-            import requests as _req2, json as _json2
-            _p2 = {
-                "sCLMID": "CLMMfdsGetMarketPriceHistory",
-                "sIssueCode": str(code).strip(),
-                "sSizyouC": "00",
-                "p_no": _next_p_no(),
-                "p_sd_date": _now_str(),
-                "sJsonOfmt": "5",
-            }
-            _r2 = _req2.post(sess.url_price,
-                             data=_json2.dumps(_p2, ensure_ascii=False, separators=(",",":")),
-                             headers={"Content-Type": "application/json"}, timeout=20)
-            _body2 = _r2.json() if _r2.status_code == 200 else {}
-            _recs2 = _body2.get("aCLMMfdsMarketPriceHistory", [])
-            if _recs2:
-                _rows2 = []
-                for _rec in _recs2:
-                    try:
-                        _rows2.append({
-                            "date":   pd.to_datetime(_rec["sDate"], format="%Y%m%d"),
-                            "open":   float(_rec["pDOP"]),
-                            "high":   float(_rec["pDHP"]),
-                            "low":    float(_rec["pDLP"]),
-                            "close":  float(_rec["pDPP"]),
-                            "volume": float(_rec["pDV"]),
-                        })
-                    except (KeyError, ValueError):
-                        continue
-                df_raw = pd.DataFrame(_rows2).sort_values("date").reset_index(drop=True)
-            else:
-                df_raw = None
+        df_raw = _fetch_daily(sess.url_price, code)
 
         if df_raw is not None and len(df_raw) > 0:
-            # base_dateでフィルタリングして直近60本
-            base_dt = pd.to_datetime(base_date)
             df_filtered = df_raw[df_raw["date"] <= base_dt].tail(80).copy()
-
-            # デバッグ: 1銘柄目だけ詳細表示
-            if i == 0:
-                with st.expander(f"🔍 DataFrame デバッグ ({code})", expanded=True):
-                    st.write(f"df_raw件数: {len(df_raw)}, df_filtered件数: {len(df_filtered)}")
-                    st.write(f"base_date: {base_date}, base_dt: {base_dt}")
-                    st.write(f"df_raw columns: {df_raw.columns.tolist()}")
-                    st.write(f"df_raw 最新3行:")
-                    st.dataframe(df_raw.tail(3))
-                    st.write(f"df_raw['date'] dtype: {df_raw['date'].dtype}")
-
             if len(df_filtered) > 0:
-                # chart_utilsのplot_daily_stockが期待する列名に変換
                 df_filtered = df_filtered.rename(columns={
                     "date":   "t",
                     "open":   "o",
@@ -155,10 +128,6 @@ if st.button("📊 チャートを生成", type="primary", key="tb_daily_btn"):
                 })
                 df_filtered["t"] = pd.to_datetime(df_filtered["t"])
                 data_map[code] = df_filtered
-                if i == 0:
-                    with st.expander(f"🔍 変換後DataFrame ({code})", expanded=True):
-                        st.write(f"変換後列名: {df_filtered.columns.tolist()}")
-                        st.dataframe(df_filtered.tail(3))
             else:
                 data_map[code] = None
         else:
