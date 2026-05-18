@@ -173,7 +173,9 @@ def login(user_id: str, password: str, base_url: str) -> tuple[TachibanaSession 
 
     errno = resp.get("p_errno", "-1")
     if errno != "0":
-        return None, resp.get("p_err", "ログイン失敗")
+        err_msg = resp.get("p_err", "ログイン失敗")
+        detail = f"p_errno={errno} / {err_msg} / auth_url={auth_url}"
+        return None, detail
 
     session = TachibanaSession(resp, base_url)
     if not session.url_request:
