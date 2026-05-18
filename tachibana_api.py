@@ -220,12 +220,10 @@ def get_daily_history(
     if sess is None:
         return None
 
-    # 5桁コードに正規化（末尾0補完）
-    code5 = _to_5digit(code)
-
+    # コードはそのまま送る（4桁が基本、5桁は優先株等のみ）
     resp = sess.price({
         "sCLMID":     "CLMMfdsGetMarketPriceHistory",
-        "sIssueCode": code5,
+        "sIssueCode": str(code).strip(),
         "sSizyouC":   "00",  # 東証
     })
 
