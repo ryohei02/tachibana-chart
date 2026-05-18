@@ -43,12 +43,16 @@ def _now_str() -> str:
 
 
 def _next_p_no() -> str:
-    """リクエスト連番（1始まり）を文字列で返す"""
+    """リクエスト連番を返す。常に前回+1を保証する"""
     if _P_NO_KEY not in st.session_state:
         st.session_state[_P_NO_KEY] = 1
     n = st.session_state[_P_NO_KEY]
     st.session_state[_P_NO_KEY] = n + 1
     return str(n)
+
+def _reset_p_no() -> None:
+    """ログイン時にp_noをリセットする"""
+    st.session_state[_P_NO_KEY] = 1
 
 
 def _build_query(params: dict) -> str:
@@ -161,6 +165,8 @@ def login(user_id: str, password: str, base_url: str) -> tuple[TachibanaSession 
     if not session.url_request:
         return None, "セッションURLが取得できませんでした"
 
+    # ログイン成功時にp_noをリセット（新セッション開始）
+    _reset_p_no()
     return session, ""
 
 
