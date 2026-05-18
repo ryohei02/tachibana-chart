@@ -67,18 +67,19 @@ if st.button("📊 チャートを生成", type="primary", key="tb_daily_btn"):
     with st.expander(f"🔍 デバッグ情報（{_debug_code}）", expanded=True):
         import json, urllib.parse
         from tachibana_api import _to_5digit, _now_str, _next_p_no
+        import requests as _req
+        _pno = _next_p_no()
         _params = {
             "sCLMID": "CLMMfdsGetMarketPriceHistory",
             "sIssueCode": str(_debug_code).strip(),
             "sSizyouC": "00",
-            "p_no": "99",
+            "p_no": _pno,
             "p_sd_date": _now_str(),
             "sJsonOfmt": "5",
         }
-        import requests
-        _r = requests.post(sess.url_price,
-                          data=json.dumps(_params, ensure_ascii=False, separators=(",",":")),
-                          headers={"Content-Type": "application/json"}, timeout=20)
+        _r = _req.post(sess.url_price,
+                       data=json.dumps(_params, ensure_ascii=False, separators=(",",":")),
+                       headers={"Content-Type": "application/json"}, timeout=20)
         st.write(f"URL: `{sess.url_price}`")
         st.write(f"ステータス: {_r.status_code}")
         try:
@@ -94,7 +95,38 @@ if st.button("📊 チャートを生成", type="primary", key="tb_daily_btn"):
 
     for i, code in enumerate(codes):
         with st.spinner(f"{code} 取得中..."):
-            df_raw = get_daily_history(sess.url_price, code)
+            # キャッシュをバイパスして直接取得
+            import requests as _req2, json as _json2
+            _p2 = {
+                "sCLMID": "CLMMfdsGetMarketPriceHistory",
+                "sIssueCode": str(code).strip(),
+                "sSizyouC": "00",
+                "p_no": _next_p_no(),
+                "p_sd_date": _now_str(),
+                "sJsonOfmt": "5",
+            }
+            _r2 = _req2.post(sess.url_price,
+                             data=_json2.dumps(_p2, ensure_ascii=False, separators=(",",":")),
+                             headers={"Content-Type": "application/json"}, timeout=20)
+            _body2 = _r2.json() if _r2.status_code == 200 else {}
+            _recs2 = _body2.get("aCLMMfdsMarketPriceHistory", [])
+            if _recs2:
+                _rows2 = []
+                for _rec in _recs2:
+                    try:
+                        _rows2.append({
+                            "date":   pd.to_datetime(_rec["sDate"], format="%Y%m%d"),
+                            "open":   float(_rec["pDOP"]),
+                            "high":   float(_rec["pDHP"]),
+                            "low":    float(_rec["pDLP"]),
+                            "close":  float(_rec["pDPP"]),
+                            "volume": float(_rec["pDV"]),
+                        })
+                    except (KeyError, ValueError):
+                        continue
+                df_raw = pd.DataFrame(_rows2).sort_values("date").reset_index(drop=True)
+            else:
+                df_raw = None
 
         if df_raw is not None and len(df_raw) > 0:
             # base_dateでフィルタリングして直近60本
