@@ -67,6 +67,7 @@ def _show_login_form() -> None:
 
         if sess is None:
             st.error(f"❌ ログイン失敗: {err}")
+            st.write(f"BASE_URL: `{base_url}`")
             return
 
         save_session(sess)
