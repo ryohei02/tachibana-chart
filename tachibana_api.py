@@ -119,7 +119,7 @@ class TachibanaSession:
         self.url_price     = raw.get("sUrlPrice",   "")   # 時価URL
         self.url_event     = raw.get("sUrlEvent",   "")   # イベントURL
         self.login_time    = datetime.now(JST)
-        self._p_no         = 1  # セッション内リクエスト連番
+        self._p_no         = 2  # ログインでp_no=1を使用済みなので2から開始
 
     def next_p_no(self) -> str:
         """セッション内のリクエスト連番を返す（常に増加）"""
