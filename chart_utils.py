@@ -14,14 +14,6 @@ import matplotlib.ticker
 import matplotlib.font_manager as fm
 import streamlit as st
 from datetime import datetime, timedelta, timezone
-try:
-    import holidays as _holidays
-    _JP_HOLIDAYS = _holidays.Japan()
-    def _is_jp_holiday(d) -> bool:
-        return d in _JP_HOLIDAYS
-except ImportError:
-    def _is_jp_holiday(d) -> bool:
-        return False
 
 JST = timezone(timedelta(hours=9))
 from concurrent.futures import ThreadPoolExecutor
@@ -48,10 +40,9 @@ BG_AX        = "#1a1a2e"
 TC           = "white"
 
 DEFAULT_CODES_18 = [
-    "6920","9984","6146","7203","6758",
-    "4063","8035","6861","9433","7974",
-    "6367","4519","8306","6954","2413",
-    "6857","3659","4661",
+    "1570","6146","6857","6920","285A",
+    "9984","5801","5803","9983","7974",
+    "7013","7011",
 ]
 
 # ── 日本語フォント ───────────────────────────────
@@ -75,19 +66,13 @@ def setup_japanese_font():
     return prop.get_name()
 
 # ── 営業日 ──────────────────────────────────────
-def _is_biz_day(d: datetime) -> bool:
-    """土日・日本祝日を除外した営業日判定"""
-    if d.weekday() >= 5:
-        return False
-    return not _is_jp_holiday(d.date())
-
 def last_business_days(n=14):
     days, d = [], datetime.now(JST)
-    if _is_biz_day(d):
+    if d.weekday() < 5:
         days.append(d.strftime("%Y-%m-%d"))
     while len(days) < n:
         d -= timedelta(days=1)
-        if _is_biz_day(d):
+        if d.weekday() < 5:
             days.append(d.strftime("%Y-%m-%d"))
     return days  # 新しい順
 
@@ -934,11 +919,12 @@ def _get_listed_info_v2(api_key: str) -> pd.DataFrame:
 
 
 def _biz_date_before(target: str, n: int) -> str:
-    d = datetime.strptime(target, "%Y-%m-%d")
+    from datetime import datetime as _dt, timedelta as _td
+    d = _dt.strptime(target, "%Y-%m-%d")
     skipped = 0
     while skipped < n:
-        d -= timedelta(days=1)
-        if _is_biz_day(d):
+        d -= _td(days=1)
+        if d.weekday() < 5:
             skipped += 1
     return d.strftime("%Y-%m-%d")
 
