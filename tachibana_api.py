@@ -83,14 +83,8 @@ def _get(url_base: str, params: dict) -> dict:
         return {"p_errno": "-1", "p_err": f"予期しないエラー: {e}"}
 
 
-def _post(url_base: str, params: dict) -> dict:
-    """
-    POSTリクエスト版（v4r8以降推奨）。
-    ボディにJSONを乗せて送信する。
-    """
-    params["p_no"]      = _next_p_no()
-    params["p_sd_date"] = _now_str()
-    params["sJsonOfmt"] = "5"
+def _post_raw(url_base: str, params: dict) -> dict:
+    """POSTリクエスト（p_no等はすでにparamsに含まれている前提）"""
     try:
         r = requests.post(
             url_base,
@@ -107,6 +101,10 @@ def _post(url_base: str, params: dict) -> dict:
     except Exception as e:
         return {"p_errno": "-1", "p_err": f"予期しないエラー: {e}"}
 
+def _post(url_base: str, params: dict) -> dict:
+    """後方互換用。_post_rawに委譲"""
+    return _post_raw(url_base, params)
+
 
 # ══════════════════════════════════════════════════════════════
 #  セッション管理
@@ -121,6 +119,13 @@ class TachibanaSession:
         self.url_price     = raw.get("sUrlPrice",   "")   # 時価URL
         self.url_event     = raw.get("sUrlEvent",   "")   # イベントURL
         self.login_time    = datetime.now(JST)
+        self._p_no         = 1  # セッション内リクエスト連番
+
+    def next_p_no(self) -> str:
+        """セッション内のリクエスト連番を返す（常に増加）"""
+        n = self._p_no
+        self._p_no += 1
+        return str(n)
 
     def is_valid(self) -> bool:
         """03:30以前かつ同日ログインならセッション有効とみなす"""
@@ -133,15 +138,24 @@ class TachibanaSession:
 
     def req(self, params: dict) -> dict:
         """業務系リクエスト送信"""
-        return _post(self.url_request, params)
+        params["p_no"]      = self.next_p_no()
+        params["p_sd_date"] = _now_str()
+        params["sJsonOfmt"] = "5"
+        return _post_raw(self.url_request, params)
 
     def master(self, params: dict) -> dict:
         """マスタリクエスト送信"""
-        return _post(self.url_master, params)
+        params["p_no"]      = self.next_p_no()
+        params["p_sd_date"] = _now_str()
+        params["sJsonOfmt"] = "5"
+        return _post_raw(self.url_master, params)
 
     def price(self, params: dict) -> dict:
         """時価リクエスト送信"""
-        return _post(self.url_price, params)
+        params["p_no"]      = self.next_p_no()
+        params["p_sd_date"] = _now_str()
+        params["sJsonOfmt"] = "5"
+        return _post_raw(self.url_price, params)
 
 
 def login(user_id: str, password: str, base_url: str) -> tuple[TachibanaSession | None, str]:
