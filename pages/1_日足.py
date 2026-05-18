@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 from chart_utils import (
     setup_japanese_font, codes_input_ui,
     build_figure_6, fig_to_png, render_charts,
-    DEFAULT_CODES_18, last_business_days, normalize_df,
+    DEFAULT_CODES_18, last_business_days,
 )
 from tachibana_api import _now_str, _post_raw
 from login_ui import require_login
@@ -106,12 +106,10 @@ if st.button("📊 チャートを生成", type="primary", key="tb_daily_btn"):
         if df_raw is not None and len(df_raw) > 0:
             df_filtered = df_raw[df_raw["date"] <= base_dt].tail(80).copy()
             if len(df_filtered) > 0:
-                # "date"列をインデックス用の"t"列として設定
-                df_filtered = df_filtered.rename(columns={"date": "t"})
-                df_filtered["t"] = pd.to_datetime(df_filtered["t"])
-                # normalize_dfで列名を正規化（open→open, close→close等）
-                df_norm = normalize_df(df_filtered, is_daily=True)
-                data_map[code] = df_norm
+                # chart_utilsが期待するDateTime列を作成
+                df_filtered["DateTime"] = pd.to_datetime(df_filtered["date"])
+                # 列名はそのまま（open/high/low/close/volume）
+                data_map[code] = df_filtered.sort_values("DateTime").reset_index(drop=True)
             else:
                 data_map[code] = None
         else:
