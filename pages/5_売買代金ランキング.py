@@ -110,7 +110,6 @@ def fetch_ranking(sess) -> pd.DataFrame | None:
             continue
 
         items = body.get("aCLMMfdsMarketPrice", [])
-        st.write(f"バッチ{i//batch_size+1}: リクエスト{len(batch)}件 → レスポンス{len(items)}件") if i == 0 else None
         for item in items:
             try:
                 code_raw = item.get("sIssueCode", "")
@@ -127,11 +126,16 @@ def fetch_ranking(sess) -> pd.DataFrame | None:
                 prev   = float(item.get("pPRP",    0) or 0)
                 time_  = item.get("tDPP:T", "")
 
+                # 現在値がない場合は前日終値で代替
+                if price == 0 and prev > 0:
+                    price = prev
+
                 # 売買代金がない場合は現在値×出来高で推計
                 if value == 0 and price > 0 and volume > 0:
                     value = price * volume
 
-                if price > 0:
+                # 売買代金が0より大きい場合のみ追加（場中のみ意味あり）
+                if price > 0 and volume > 0:
                     all_rows.append({
                         "code":       code,
                         "現在値":     price,
