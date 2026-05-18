@@ -62,6 +62,36 @@ if st.button("📊 チャートを生成", type="primary", key="tb_daily_btn"):
     data_map: dict = {}
     prog = st.progress(0, text="日足データ取得中...")
 
+    # ── デバッグ: 1銘柄目のAPIレスポンスを表示 ──
+    _debug_code = codes[0] if codes else "69200"
+    with st.expander(f"🔍 デバッグ情報（{_debug_code}）", expanded=True):
+        import json, urllib.parse
+        from tachibana_api import _to_5digit, _now_str, _next_p_no
+        _params = {
+            "sCLMID": "CLMMfdsGetMarketPriceHistory",
+            "sIssueCode": _to_5digit(_debug_code),
+            "sSizyouC": "00",
+            "p_no": "99",
+            "p_sd_date": _now_str(),
+            "sJsonOfmt": "5",
+        }
+        import requests
+        _r = requests.post(sess.url_price,
+                          data=json.dumps(_params, ensure_ascii=False, separators=(",",":")),
+                          headers={"Content-Type": "application/json"}, timeout=20)
+        st.write(f"URL: `{sess.url_price}`")
+        st.write(f"ステータス: {_r.status_code}")
+        try:
+            _body = _r.json()
+            _records = _body.get("aCLMMfdsMarketPriceHistory", [])
+            st.write(f"p_errno: {_body.get('p_errno')}  /  レコード件数: {len(_records)}")
+            if _records:
+                st.write("最新3件:", _records[-3:])
+            else:
+                st.json(_body)
+        except:
+            st.text(_r.text[:500])
+
     for i, code in enumerate(codes):
         with st.spinner(f"{code} 取得中..."):
             df_raw = get_daily_history(sess.url_price, code)
