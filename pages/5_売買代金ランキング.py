@@ -92,10 +92,13 @@ def fetch_ranking(sess) -> pd.DataFrame | None:
         # 4桁→5桁コードに変換（APIは5桁コードが必要な場合あり）
         batch_codes = []
         for c in batch:
+            # 4桁数字のみ末尾0を付加。英字混じり（285A等）はそのまま
             if len(c) == 4 and c.isdigit():
                 batch_codes.append(c + "0")
+            elif len(c) == 5 and c.endswith("0") and c[:-1].isdigit():
+                batch_codes.append(c)  # 既に5桁ならそのまま
             else:
-                batch_codes.append(c)
+                batch_codes.append(c)  # 285A等はそのまま
 
         body = sess.price({
             "sCLMID":          "CLMMfdsGetMarketPrice",
@@ -106,7 +109,9 @@ def fetch_ranking(sess) -> pd.DataFrame | None:
         if body.get("p_errno", "-1") != "0":
             continue
 
-        for item in body.get("aCLMMfdsMarketPrice", []):
+        items = body.get("aCLMMfdsMarketPrice", [])
+        st.write(f"バッチ{i//batch_size+1}: リクエスト{len(batch)}件 → レスポンス{len(items)}件") if i == 0 else None
+        for item in items:
             try:
                 code_raw = item.get("sIssueCode", "")
                 # 5桁→4桁変換
