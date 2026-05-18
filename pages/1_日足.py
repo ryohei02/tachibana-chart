@@ -101,6 +101,16 @@ if st.button("📊 チャートを生成", type="primary", key="tb_daily_btn"):
             base_dt = pd.to_datetime(base_date)
             df_filtered = df_raw[df_raw["date"] <= base_dt].tail(80).copy()
 
+            # デバッグ: 1銘柄目だけ詳細表示
+            if i == 0:
+                with st.expander(f"🔍 DataFrame デバッグ ({code})", expanded=True):
+                    st.write(f"df_raw件数: {len(df_raw)}, df_filtered件数: {len(df_filtered)}")
+                    st.write(f"base_date: {base_date}, base_dt: {base_dt}")
+                    st.write(f"df_raw columns: {df_raw.columns.tolist()}")
+                    st.write(f"df_raw 最新3行:")
+                    st.dataframe(df_raw.tail(3))
+                    st.write(f"df_raw['date'] dtype: {df_raw['date'].dtype}")
+
             if len(df_filtered) > 0:
                 # chart_utilsのplot_daily_stockが期待する列名に変換
                 df_filtered = df_filtered.rename(columns={
@@ -113,6 +123,10 @@ if st.button("📊 チャートを生成", type="primary", key="tb_daily_btn"):
                 })
                 df_filtered["t"] = pd.to_datetime(df_filtered["t"])
                 data_map[code] = df_filtered
+                if i == 0:
+                    with st.expander(f"🔍 変換後DataFrame ({code})", expanded=True):
+                        st.write(f"変換後列名: {df_filtered.columns.tolist()}")
+                        st.dataframe(df_filtered.tail(3))
             else:
                 data_map[code] = None
         else:
