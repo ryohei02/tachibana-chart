@@ -2,6 +2,13 @@
 5_売買代金ランキング.py
 立花証券API版 場中リアルタイム売買代金ランキング
 時価総額上位約240銘柄を対象に売買代金順にランキング表示
+
+【修正履歴】
+- 5桁変換を廃止: 4桁コードをそのまま送信（285A以外も正常取得できるよう）
+- pDJ単位バグ修正: pDJは円単位のため /1e8 は正しい。ただし推計値(price*volume)も円単位で統一
+- sTargetColumnを明示指定: 必要フィールドを確実に取得
+- デバッグexpanderを常時表示→折りたたみ＋全バッチ確認に改善
+- 自動更新ロジックを st.rerun() + session_state で正しく実装
 """
 
 import streamlit as st
@@ -9,9 +16,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -31,7 +36,6 @@ if sess is None:
     st.stop()
 
 # ── 対象銘柄リスト（時価総額上位約240銘柄・4桁コード） ──────
-# プライム市場 時価総額上位銘柄
 TARGET_CODES = [
     # 超大型（時価総額1兆円超）
     "7203","8306","9984","6861","8316","7974","6758","9432","4063","6098",
@@ -67,8 +71,8 @@ for c in TARGET_CODES:
         seen.add(c)
         CODES.append(c)
 
-# ── 設定 ──────────────────────────────────────────────────────
-st.info(f"対象銘柄数: **{len(CODES)}銘柄** | 取得時刻: {datetime.now(JST).strftime('%H:%M:%S')}")
+# ── 設定UI ────────────────────────────────────────────────────
+st.info(f"対象銘柄数: **{len(CODES)}銘柄** | 表示更新: {datetime.now(JST).strftime('%H:%M:%S')}")
 
 top_n = st.slider("表示件数", min_value=10, max_value=60, value=30, step=5)
 
@@ -78,80 +82,118 @@ with col_btn1:
 with col_btn2:
     auto_refresh = st.checkbox("⏱ 60秒ごとに自動更新", value=False)
 
+# デバッグモード切り替え
+debug_mode = st.sidebar.checkbox("🔍 デバッグモード（APIレスポンス確認）", value=False)
 
-def fetch_ranking(sess) -> pd.DataFrame | None:
-    """全対象銘柄の現在値・出来高・売買代金を取得してDataFrameを返す"""
-    # 取得する情報コード
-    # sTargetColumnは指定せず全フィールド取得（フィールド名確認のため）
 
+# ══════════════════════════════════════════════════════════════
+#  データ取得関数
+# ══════════════════════════════════════════════════════════════
+
+def fetch_ranking(sess, debug: bool = False) -> pd.DataFrame | None:
+    """
+    全対象銘柄の現在値・出来高・売買代金を取得してDataFrameを返す。
+
+    修正ポイント:
+    1. コードは4桁のままAPIに送る（5桁変換しない）
+       → 以前は7203→72030に変換していたが、これが原因で285A以外が空になっていた可能性
+    2. sTargetColumnを明示指定して必要フィールドを確実に取得
+    3. pDJの単位: 円単位として /1e8 で億円に変換（正しい）
+       → 推計値(price*volume)も円単位なので統一
+    """
     all_rows = []
-    batch_size = 120  # 1リクエスト最大120銘柄
+    batch_size = 50  # 安全のため50件ずつ（120→50に縮小）
+    debug_shown = False  # デバッグ情報は最初のバッチのみ表示
 
     for i in range(0, len(CODES), batch_size):
         batch = CODES[i:i + batch_size]
-        # 4桁→5桁コードに変換（APIは5桁コードが必要な場合あり）
-        batch_codes = []
-        for c in batch:
-            # 4桁数字のみ末尾0を付加。英字混じり（285A等）はそのまま
-            if len(c) == 4 and c.isdigit():
-                batch_codes.append(c + "0")
-            elif len(c) == 5 and c.endswith("0") and c[:-1].isdigit():
-                batch_codes.append(c)  # 既に5桁ならそのまま
-            else:
-                batch_codes.append(c)  # 285A等はそのまま
 
+        # ★修正1: 4桁コードをそのまま送る（5桁変換なし）
+        # 285Aのような英字コードも含めてそのまま渡す
         body = sess.price({
-            "sCLMID":          "CLMMfdsGetMarketPrice",
-            "sTargetIssueCode": ",".join(batch_codes),
+            "sCLMID":           "CLMMfdsGetMarketPrice",
+            "sTargetIssueCode": ",".join(batch),
+            # ★修正2: 必要フィールドを明示指定
+            # pDPP=現在値, tDPP:T=時刻, pPRP=前日終値,
+            # pDYWP=騰落額, pDYRP=騰落率, pDV=出来高,
+            # pDHP=高値, pDLP=安値, pDOP=始値, pDJ=売買代金
+            "sTargetColumn": "pDPP,tDPP:T,pPRP,pDYWP,pDYRP,pDV,pDHP,pDLP,pDOP,pDJ",
         })
 
+        # APIエラー時はスキップ（バッチ単位で継続）
         if body.get("p_errno", "-1") != "0":
+            if debug:
+                st.warning(f"バッチ{i//batch_size+1} エラー: p_errno={body.get('p_errno')} / {body.get('p_err')}")
             continue
 
         items = body.get("aCLMMfdsMarketPrice", [])
-        # デバッグ：最初のバッチの最初の2件を表示
-        if i == 0 and items:
-            with st.expander("🔍 APIレスポンス確認（先頭2件）", expanded=True):
-                st.write(f"取得件数: {len(items)}件")
+
+        # デバッグ: 最初のバッチのみ詳細表示
+        if debug and not debug_shown and items:
+            debug_shown = True
+            with st.expander(f"🔍 APIレスポンス確認（バッチ1: {batch[:3]}... 先頭2件）", expanded=True):
+                st.write(f"送信コード例（変換なし）: {batch[:5]}")
+                st.write(f"取得件数: {len(items)}件 / 送信件数: {len(batch)}件")
                 for _item in items[:2]:
                     st.json(_item)
+                # pDJの値を確認
+                if items:
+                    pdj_val = items[0].get("pDJ", "（キーなし）")
+                    pdp_val = items[0].get("pDPP", 0)
+                    pdv_val = items[0].get("pDV", 0)
+                    st.write(f"**pDJ（売買代金）**: `{pdj_val}`")
+                    st.write(f"**参考**: 現在値({pdp_val}) × 出来高({pdv_val}) = {float(pdp_val or 0) * float(pdv_val or 0):,.0f}円")
+                    st.caption("↑ pDJと参考値がほぼ一致→円単位、1/100程度→億円単位")
+
         for item in items:
             try:
                 code_raw = item.get("sIssueCode", "")
-                # 5桁→4桁変換
-                code = code_raw[:-1] if (len(code_raw) == 5 and code_raw.endswith("0") and code_raw[:-1].isdigit()) else code_raw
+                # レスポンスのコードが5桁数字なら4桁に戻す（285A等はそのまま）
+                if len(code_raw) == 5 and code_raw.endswith("0") and code_raw[:-1].isdigit():
+                    code = code_raw[:-1]
+                else:
+                    code = code_raw
 
-                price  = float(item.get("pDPP",    0) or 0)
-                volume = float(item.get("pDV",     0) or 0)
-                value  = float(item.get("pDJ",     0) or 0)  # 売買代金（円）
-                chg_r  = float(item.get("pDYRP",   0) or 0)  # 騰落率(%)
-                high   = float(item.get("pDHP",    0) or 0)
-                low    = float(item.get("pDLP",    0) or 0)
-                open_  = float(item.get("pDOP",    0) or 0)
-                prev   = float(item.get("pPRP",    0) or 0)
+                price  = float(item.get("pDPP",  0) or 0)   # 現在値
+                volume = float(item.get("pDV",   0) or 0)   # 出来高
+                pdj    = float(item.get("pDJ",   0) or 0)   # 売買代金（円単位）
+                chg_r  = float(item.get("pDYRP", 0) or 0)   # 騰落率(%)
+                chg_w  = float(item.get("pDYWP", 0) or 0)   # 騰落額
+                high   = float(item.get("pDHP",  0) or 0)   # 高値
+                low    = float(item.get("pDLP",  0) or 0)   # 安値
+                open_  = float(item.get("pDOP",  0) or 0)   # 始値
+                prev   = float(item.get("pPRP",  0) or 0)   # 前日終値
                 time_  = item.get("tDPP:T", "")
 
                 # 現在値がない場合は前日終値で代替
                 if price == 0 and prev > 0:
                     price = prev
 
-                # 売買代金がない場合は現在値×出来高で推計
-                if value == 0 and price > 0 and volume > 0:
-                    value = price * volume
+                # ★修正3: 売買代金の単位統一
+                # pDJが取れていればそれを使う（円単位 → /1e8 で億円）
+                # 取れていなければ 現在値×出来高 で推計（同じく円単位）
+                if pdj > 0:
+                    value_oku = pdj / 1e8
+                elif price > 0 and volume > 0:
+                    value_oku = price * volume / 1e8
+                else:
+                    value_oku = 0.0
 
-                # 現在値があれば追加（売買代金0は除外）
-                if price > 0 and value > 0:
+                # 現在値あり・売買代金あり の銘柄のみ追加
+                if price > 0 and value_oku > 0:
                     all_rows.append({
-                        "code":       code,
-                        "現在値":     price,
-                        "騰落率(%)":  chg_r,
-                        "出来高":     volume,
-                        "売買代金(億円)": value / 1e8,
-                        "高値":       high,
-                        "安値":       low,
-                        "始値":       open_,
-                        "前日終値":   prev,
-                        "時刻":       time_,
+                        "code":        code,
+                        "現在値":      price,
+                        "騰落率(%)":   chg_r,
+                        "騰落額":      chg_w,
+                        "出来高":      volume,
+                        "売買代金(億円)": value_oku,
+                        "高値":        high,
+                        "安値":        low,
+                        "始値":        open_,
+                        "前日終値":    prev,
+                        "時刻":        time_,
+                        "pDJ生値":     pdj,   # デバッグ用（後で確認できるよう保持）
                     })
             except (ValueError, TypeError):
                 continue
@@ -168,45 +210,28 @@ def fetch_ranking(sess) -> pd.DataFrame | None:
     return df
 
 
-# ── 実行 ──────────────────────────────────────────────────────
-if generate or auto_refresh:
-    if auto_refresh and not generate:
-        time.sleep(60)
+# ══════════════════════════════════════════════════════════════
+#  実行・表示
+# ══════════════════════════════════════════════════════════════
 
-    with st.spinner(f"{len(CODES)}銘柄のデータを取得中...（約3〜5秒）"):
-        t0 = time.time()
-        df = fetch_ranking(sess)
-        elapsed = time.time() - t0
+def display_ranking(df: pd.DataFrame, top_n: int, now_str: str, debug: bool):
+    """ランキング結果を表示する"""
 
-    if df is None or df.empty:
-        st.error("データを取得できませんでした。")
-        st.stop()
-
-    now_str = datetime.now(JST).strftime("%H:%M:%S")
-    st.success(f"✅ {len(df)}銘柄取得完了　{now_str}　（{elapsed:.1f}秒）")
-
-    # 上位N件
     df_top = df.head(top_n).copy()
 
     # ── テーブル表示 ──────────────────────────────────────────
     st.markdown("---")
     st.markdown(f"### 📊 売買代金ランキング上位{top_n}（{now_str}時点）")
 
-    def color_change(val):
-        if val > 0:
-            return "color: #E74C3C; font-weight: bold"
-        elif val < 0:
-            return "color: #3498DB; font-weight: bold"
-        return ""
-
-    display_df = df_top[["code","現在値","騰落率(%)","売買代金(億円)","出来高","高値","安値"]].copy()
+    display_df = df_top[["code","現在値","騰落率(%)","騰落額","売買代金(億円)","出来高","高値","安値"]].copy()
     display_df["売買代金(億円)"] = display_df["売買代金(億円)"].map(lambda x: f"{x:.1f}")
-    display_df["出来高"] = display_df["出来高"].map(lambda x: f"{int(x):,}")
-    display_df["現在値"] = display_df["現在値"].map(lambda x: f"{x:,.0f}")
-    display_df["高値"]   = display_df["高値"].map(lambda x: f"{x:,.0f}")
-    display_df["安値"]   = display_df["安値"].map(lambda x: f"{x:,.0f}")
+    display_df["出来高"]   = display_df["出来高"].map(lambda x: f"{int(x):,}")
+    display_df["現在値"]   = display_df["現在値"].map(lambda x: f"{x:,.0f}")
+    display_df["高値"]     = display_df["高値"].map(lambda x: f"{x:,.0f}")
+    display_df["安値"]     = display_df["安値"].map(lambda x: f"{x:,.0f}")
+    display_df["騰落額"]   = display_df["騰落額"].map(lambda x: f"{x:+.0f}")
     display_df["騰落率(%)"] = display_df["騰落率(%)"].map(lambda x: f"{x:+.2f}%")
-    display_df.columns = ["コード","現在値","騰落率","売買代金(億)","出来高","高値","安値"]
+    display_df.columns = ["コード","現在値","騰落率","騰落額","売買代金(億)","出来高","高値","安値"]
 
     st.dataframe(
         display_df,
@@ -214,42 +239,106 @@ if generate or auto_refresh:
         height=min(60 + top_n * 35, 800),
     )
 
+    # ── pDJ生値デバッグ表示 ───────────────────────────────────
+    if debug:
+        with st.expander("🔍 pDJ生値確認（上位10件）"):
+            debug_df = df_top.head(10)[["code","現在値","出来高","pDJ生値","売買代金(億円)"]].copy()
+            debug_df["推計値(億)"] = debug_df["現在値"] * debug_df["出来高"] / 1e8
+            st.dataframe(debug_df)
+            st.caption("pDJ生値 ÷ 1e8 ≈ 売買代金(億円) なら円単位で正しい。大きくズレる場合は単位要確認。")
+
     # ── コードコピー用 ────────────────────────────────────────
     st.markdown("---")
-    top12_codes  = df_top.head(12)["code"].tolist()
-    codes_str    = ",".join(top12_codes)
-    st.markdown("### 📋 上位12銘柄コード（チャートアプリ用）")
-    st.code(codes_str, language=None)
+    top18_codes = df_top.head(18)["code"].tolist()
+    st.markdown("### 📋 上位18銘柄コード（チャートページ用）")
+    st.code(",".join(top18_codes), language=None)
 
     # ── 棒グラフ ──────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 📈 売買代金グラフ")
 
-    fig, ax = plt.subplots(figsize=(12, max(4, top_n * 0.3)))
-    colors = ["#E74C3C" if v > 0 else "#3498DB"
+    fig, ax = plt.subplots(figsize=(12, max(4, top_n * 0.35)))
+    colors = ["#E74C3C" if v > 0 else ("#3498DB" if v < 0 else "#888888")
               for v in df_top["騰落率(%)"]]
     bars = ax.barh(
         range(len(df_top)),
         df_top["売買代金(億円)"],
-        color=colors, alpha=0.85
+        color=colors, alpha=0.85,
     )
     ax.set_yticks(range(len(df_top)))
-    ax.set_yticklabels([f"{i+1}. {c}" for i, c in enumerate(df_top["code"])],
-                       fontsize=9)
+    ax.set_yticklabels(
+        [f"{idx+1}. {row['code']}  {row['騰落率(%)']:+.2f}%"
+         for idx, row in df_top.reset_index(drop=True).iterrows()],
+        fontsize=9,
+    )
     ax.invert_yaxis()
     ax.set_xlabel("売買代金（億円）", fontsize=10)
     ax.set_title(f"売買代金ランキング上位{top_n}　{now_str}時点", fontsize=12, fontweight="bold")
-    ax.spines[["top","right"]].set_visible(False)
+    ax.spines[["top", "right"]].set_visible(False)
     ax.grid(axis="x", alpha=0.3)
 
     # 値ラベル
-    for i, (bar, val) in enumerate(zip(bars, df_top["売買代金(億円)"])):
-        ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height()/2,
-                f"{val:.0f}億", va="center", fontsize=8)
+    max_val = df_top["売買代金(億円)"].max()
+    for bar, val in zip(bars, df_top["売買代金(億円)"]):
+        ax.text(
+            bar.get_width() + max_val * 0.005,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:.0f}億",
+            va="center", fontsize=8,
+        )
+
+    # 凡例
+    import matplotlib.patches as mpatches
+    ax.legend(
+        handles=[
+            mpatches.Patch(color="#E74C3C", label="上昇"),
+            mpatches.Patch(color="#3498DB", label="下落"),
+        ],
+        loc="lower right", fontsize=9,
+    )
 
     plt.tight_layout()
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
-    if auto_refresh:
+
+# ── メイン実行 ────────────────────────────────────────────────
+if generate or (auto_refresh and "last_fetch" not in st.session_state):
+    with st.spinner(f"{len(CODES)}銘柄のデータを取得中...（約5〜10秒）"):
+        t0 = time.time()
+        df = fetch_ranking(sess, debug=debug_mode)
+        elapsed = time.time() - t0
+
+    if df is None or df.empty:
+        st.error("データを取得できませんでした。デバッグモードをONにして再試行してください。")
+        st.stop()
+
+    now_str = datetime.now(JST).strftime("%H:%M:%S")
+    st.success(f"✅ {len(df)}銘柄取得完了　{now_str}　（{elapsed:.1f}秒）")
+
+    # session_stateに保存（自動更新用）
+    st.session_state["ranking_df"]    = df
+    st.session_state["ranking_time"]  = now_str
+    st.session_state["last_fetch"]    = time.time()
+
+# 保存済みデータがあれば表示
+if "ranking_df" in st.session_state:
+    display_ranking(
+        st.session_state["ranking_df"],
+        top_n,
+        st.session_state.get("ranking_time", ""),
+        debug=debug_mode,
+    )
+
+# 自動更新: 60秒待ってrerun
+if auto_refresh:
+    last = st.session_state.get("last_fetch", 0)
+    remaining = 60 - int(time.time() - last)
+    if remaining > 0:
+        st.caption(f"⏱ 次の自動更新まで {remaining} 秒")
+        time.sleep(1)
+        st.rerun()
+    else:
+        # 60秒経過→再取得
+        del st.session_state["last_fetch"]
         st.rerun()
