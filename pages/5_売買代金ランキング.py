@@ -82,7 +82,7 @@ with col_btn2:
 def fetch_ranking(sess) -> pd.DataFrame | None:
     """全対象銘柄の現在値・出来高・売買代金を取得してDataFrameを返す"""
     # 取得する情報コード
-    columns = "pDPP,pDYRP,pDV,pDJ,pDHP,pDLP,pDOP,pPRP,tDPP:T"
+    # sTargetColumnは指定せず全フィールド取得（フィールド名確認のため）
 
     all_rows = []
     batch_size = 120  # 1リクエスト最大120銘柄
@@ -103,7 +103,6 @@ def fetch_ranking(sess) -> pd.DataFrame | None:
         body = sess.price({
             "sCLMID":          "CLMMfdsGetMarketPrice",
             "sTargetIssueCode": ",".join(batch_codes),
-            "sTargetColumn":   columns,
         })
 
         if body.get("p_errno", "-1") != "0":
