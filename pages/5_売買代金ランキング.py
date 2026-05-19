@@ -110,6 +110,12 @@ def fetch_ranking(sess) -> pd.DataFrame | None:
             continue
 
         items = body.get("aCLMMfdsMarketPrice", [])
+        # デバッグ：最初のバッチの最初の2件を表示
+        if i == 0 and items:
+            with st.expander("🔍 APIレスポンス確認（先頭2件）", expanded=True):
+                st.write(f"取得件数: {len(items)}件")
+                for _item in items[:2]:
+                    st.json(_item)
         for item in items:
             try:
                 code_raw = item.get("sIssueCode", "")
@@ -134,8 +140,8 @@ def fetch_ranking(sess) -> pd.DataFrame | None:
                 if value == 0 and price > 0 and volume > 0:
                     value = price * volume
 
-                # 売買代金が0より大きい場合のみ追加（場中のみ意味あり）
-                if price > 0 and volume > 0:
+                # 現在値があれば追加（売買代金0は除外）
+                if price > 0 and value > 0:
                     all_rows.append({
                         "code":       code,
                         "現在値":     price,
