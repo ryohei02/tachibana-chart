@@ -214,13 +214,12 @@ for c in ISSUE_MASTER:
 # ── UI ───────────────────────────────────────────────────────
 st.info(f"対象銘柄数: **{len(CODES)}銘柄** | 更新: {datetime.now(JST).strftime('%H:%M:%S')}")
 
-col_s1, col_s2, col_s3 = st.columns(3)
+col_s1, col_s2 = st.columns(2)
 with col_s1:
-    top_n       = st.slider("表示件数", 10, 60, 60, 10)
+    top_n      = st.slider("表示件数", 10, 60, 60, 10)
 with col_s2:
-    daily_top_n = st.slider("日足取得（上位N銘柄）", 10, 30, 20, 5)
-with col_s3:
-    progress_n  = st.slider("進捗率計算（上位N銘柄）", 5, 20, 20, 5)
+    progress_n = st.slider("進捗率計算（上位N銘柄）", 5, 20, 20, 5)
+daily_top_n = 60  # 日足は常に上位60銘柄取得
 
 col_btn1, col_btn2 = st.columns([1, 3])
 with col_btn1:
@@ -395,20 +394,22 @@ def build_ranking_image(df_slice: pd.DataFrame, title: str, now_str: str, progre
              f"＊前日比は進捗率補正済み　{now_str}現在",
              color="#888888", fontsize=9, va="top")
 
-    # ── 列定義 [label, x_center, width_ratio, align] ────────
+    # ── 列定義 [label, x位置, align] ────────────────────────
+    # 現在値を当日騰落の左に追加、順位左の余白列を削除
     cols = [
-        ("順位",          0.025, "center"),
-        ("銘柄名",        0.115, "left"),
-        ("コード",        0.215, "center"),
-        ("規模",          0.265, "center"),
-        ("業種",          0.335, "center"),
-        ("売買代金(億)",  0.415, "right"),
-        ("前日比*",       0.490, "right"),
-        ("5日平均比*",    0.565, "right"),
-        ("出来高(千株)",  0.650, "right"),
-        ("当日騰落",      0.730, "right"),
-        ("20日騰落",      0.805, "right"),
-        ("60日騰落",      0.880, "right"),
+        ("順位",          0.022, "center"),
+        ("銘柄名",        0.095, "left"),
+        ("コード",        0.200, "center"),
+        ("規模",          0.248, "center"),
+        ("業種",          0.310, "center"),
+        ("売買代金(億)",  0.390, "right"),
+        ("前日比*",       0.455, "right"),
+        ("5日平均比*",    0.520, "right"),
+        ("出来高(千株)",  0.595, "right"),
+        ("現在値",        0.665, "right"),
+        ("当日騰落",      0.740, "right"),
+        ("20日騰落",      0.815, "right"),
+        ("60日騰落",      0.888, "right"),
     ]
 
     # ヘッダー行のy座標
@@ -436,12 +437,13 @@ def build_ranking_image(df_slice: pd.DataFrame, title: str, now_str: str, progre
             bg.set_facecolor("#151D28")
             bg.axis("off")
 
-        rank    = row.name  # indexが順位
+        rank    = int(row["rank"])   # build_ranking_image呼び出し時にrank列として渡す
         name    = str(row["銘柄名"])[:12]
         code    = str(row["code"])
         size    = str(row["規模"])
         sector  = str(row["業種"])[:6]
         val_oku = row["売買代金(億)"]
+        price   = row["現在値"]
         chg_r   = row["騰落率(%)"]
         prev_r  = row.get("前日比(%)", np.nan)
         avg5_r  = row.get("5日平均比(%)", np.nan)
@@ -451,39 +453,27 @@ def build_ranking_image(df_slice: pd.DataFrame, title: str, now_str: str, progre
 
         s_color = size_colors.get(size, "#888888")
 
-        # 順位（上位3はゴールド/シルバー/ブロンズ）
+        # 順位（1〜3位はゴールド/シルバー/ブロンズ）
         rank_color = {1: "#FFD700", 2: "#C0C0C0", 3: "#CD7F32"}.get(rank, "#CCCCCC")
-        fig.text(cols[0][1], y, str(rank), color=rank_color, fontsize=9,
-                 fontweight="bold", ha="center", va="center", transform=fig.transFigure)
-        fig.text(cols[1][1], y, name, color="#E8E8E8", fontsize=9,
-                 ha="left", va="center", transform=fig.transFigure)
-        fig.text(cols[2][1], y, code, color="#AABBCC", fontsize=8.5,
-                 ha="center", va="center", transform=fig.transFigure)
-        fig.text(cols[3][1], y, size, color=s_color, fontsize=8,
-                 ha="center", va="center", transform=fig.transFigure)
-        fig.text(cols[4][1], y, sector, color="#99AACC", fontsize=8,
-                 ha="center", va="center", transform=fig.transFigure)
-        fig.text(cols[5][1], y, f"{val_oku:.0f}", color="#FFFFFF", fontsize=9,
-                 fontweight="bold", ha="right", va="center", transform=fig.transFigure)
-        # 前日比
-        fig.text(cols[6][1], y, _pct_str(prev_r), color=_pct_color(prev_r), fontsize=9,
-                 fontweight="bold", ha="right", va="center", transform=fig.transFigure)
-        # 5日平均比
-        fig.text(cols[7][1], y, _pct_str(avg5_r), color=_pct_color(avg5_r), fontsize=9,
-                 fontweight="bold", ha="right", va="center", transform=fig.transFigure)
-        # 出来高
+        fig.text(cols[0][1], y, str(rank),   color=rank_color,  fontsize=9, fontweight="bold", ha="center", va="center", transform=fig.transFigure)
+        fig.text(cols[1][1], y, name,        color="#E8E8E8",   fontsize=9, ha="left",   va="center", transform=fig.transFigure)
+        fig.text(cols[2][1], y, code,        color="#AABBCC",   fontsize=8.5, ha="center", va="center", transform=fig.transFigure)
+        fig.text(cols[3][1], y, size,        color=s_color,     fontsize=8, ha="center", va="center", transform=fig.transFigure)
+        fig.text(cols[4][1], y, sector,      color="#99AACC",   fontsize=8, ha="center", va="center", transform=fig.transFigure)
+        fig.text(cols[5][1], y, f"{val_oku:.0f}", color="#FFFFFF", fontsize=9, fontweight="bold", ha="right", va="center", transform=fig.transFigure)
+        fig.text(cols[6][1], y, _pct_str(prev_r), color=_pct_color(prev_r), fontsize=9, fontweight="bold", ha="right", va="center", transform=fig.transFigure)
+        fig.text(cols[7][1], y, _pct_str(avg5_r), color=_pct_color(avg5_r), fontsize=9, fontweight="bold", ha="right", va="center", transform=fig.transFigure)
         vol_str = f"{int(vol_k):,}" if not pd.isna(vol_k) else "-"
-        fig.text(cols[8][1], y, vol_str, color="#AAAAAA", fontsize=8.5,
-                 ha="right", va="center", transform=fig.transFigure)
+        fig.text(cols[8][1], y, vol_str,     color="#AAAAAA",   fontsize=8.5, ha="right", va="center", transform=fig.transFigure)
+        # 現在値
+        price_str = f"{price:,.0f}" if not pd.isna(price) and price > 0 else "-"
+        fig.text(cols[9][1], y, price_str,   color="#DDDDDD",   fontsize=9, ha="right", va="center", transform=fig.transFigure)
         # 当日騰落
-        fig.text(cols[9][1], y, _pct_str(chg_r, dec=2), color=_pct_color(chg_r), fontsize=9,
-                 fontweight="bold", ha="right", va="center", transform=fig.transFigure)
+        fig.text(cols[10][1], y, _pct_str(chg_r, dec=2), color=_pct_color(chg_r), fontsize=9, fontweight="bold", ha="right", va="center", transform=fig.transFigure)
         # 20日騰落
-        fig.text(cols[10][1], y, _pct_str(d20), color=_pct_color(d20), fontsize=9,
-                 fontweight="bold", ha="right", va="center", transform=fig.transFigure)
+        fig.text(cols[11][1], y, _pct_str(d20), color=_pct_color(d20), fontsize=9, fontweight="bold", ha="right", va="center", transform=fig.transFigure)
         # 60日騰落
-        fig.text(cols[11][1], y, _pct_str(d60), color=_pct_color(d60), fontsize=9,
-                 fontweight="bold", ha="right", va="center", transform=fig.transFigure)
+        fig.text(cols[12][1], y, _pct_str(d60), color=_pct_color(d60), fontsize=9, fontweight="bold", ha="right", va="center", transform=fig.transFigure)
 
     # フッター
     fig.text(0.98, 0.015, "データ: 立花証券e支店API　＊前日比・5日平均比は進捗率補正済み（終日換算）",
@@ -523,6 +513,7 @@ def display_ranking(df, top_n, now_str, debug):
     for i, row in df_top.iterrows():
         s_color  = size_colors.get(row["規模"], "#888")
         vol_str  = f'{int(row["出来高(千株)"]):,}' if not pd.isna(row["出来高(千株)"]) else "-"
+        price_str = f'{row["現在値"]:,.0f}' if not pd.isna(row["現在値"]) and row["現在値"] > 0 else "-"
         rows_html += f"""
         <tr>
           <td style="text-align:center;color:#FFD700;font-weight:bold">{i}</td>
@@ -533,10 +524,11 @@ def display_ranking(df, top_n, now_str, debug):
           <td style="text-align:right;font-weight:bold">{row['売買代金(億)']:.0f}</td>
           <td style="text-align:right">{ _color_pct(row.get('前日比(%)'))    if has_daily else '-'}</td>
           <td style="text-align:right">{ _color_pct(row.get('5日平均比(%)')) if has_daily else '-'}</td>
+          <td style="text-align:right;color:#AAA;font-size:0.85em">{vol_str}</td>
+          <td style="text-align:right;color:#DDD">{price_str}</td>
           <td style="text-align:right">{ _color_pct(row['騰落率(%)'], 2)}</td>
           <td style="text-align:right">{ _color_pct(row.get('20日騰落(%)')) if has_daily else '-'}</td>
           <td style="text-align:right">{ _color_pct(row.get('60日騰落(%)')) if has_daily else '-'}</td>
-          <td style="text-align:right;color:#AAA;font-size:0.85em">{vol_str}</td>
         </tr>"""
 
     st.markdown(f"""
@@ -550,7 +542,7 @@ def display_ranking(df, top_n, now_str, debug):
     <table class="rtable"><thead><tr>
       <th>順位</th><th>銘柄名</th><th>コード</th><th>規模</th><th>業種</th>
       <th>売買代金(億)</th><th>前日比*</th><th>5日平均比*</th>
-      <th>当日騰落</th><th>20日騰落</th><th>60日騰落</th><th>出来高(千株)</th>
+      <th>出来高(千株)</th><th>現在値</th><th>当日騰落</th><th>20日騰落</th><th>60日騰落</th>
     </tr></thead><tbody>{rows_html}</tbody></table>
     <p style="color:#888;font-size:0.78em;margin-top:4px">* 進捗率補正済み（終日換算値で比較）</p>
     """, unsafe_allow_html=True)
@@ -578,9 +570,11 @@ def display_ranking(df, top_n, now_str, debug):
             if len(slice_df) == 0:
                 st.caption(f"{label}: データなし")
                 continue
-            # 画像生成
+            # indexを"rank"列として保持してから渡す
+            tmp = slice_df.copy()
+            tmp["rank"] = tmp.index  # indexが1始まりの順位
             png = build_ranking_image(
-                slice_df.reset_index(),   # reset_index()でrank列を保持
+                tmp.reset_index(drop=True),
                 f"{date_str}　{label}",
                 now_str,
                 progress_rate,
@@ -621,7 +615,7 @@ if generate or (auto_refresh and "last_fetch" not in st.session_state):
     now_str = datetime.now(JST).strftime("%H:%M:%S")
 
     top_codes_for_daily = df_snap.head(daily_top_n)["code"].tolist()
-    with st.spinner(f"📈 上位{daily_top_n}銘柄の日足取得中..."):
+    with st.spinner(f"📈 上位{daily_top_n}銘柄の日足取得中...（約{daily_top_n//4}秒）"):
         t1 = time.time()
         daily_map = fetch_daily_for_codes(sess, top_codes_for_daily, debug=debug_mode)
     st.success(f"✅ 日足取得完了　（{time.time()-t1:.1f}秒）")
