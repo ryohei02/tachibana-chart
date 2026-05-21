@@ -291,10 +291,17 @@ def fetch_daily_for_codes(sess, codes, debug=False):
     result = {}
     prog = st.progress(0, text="日足データ取得中...")
     for i, code in enumerate(codes):
-        body = sess.price({
-            "sCLMID": "CLMMfdsGetMarketPriceHistory",
-            "sIssueCode": str(code).strip(), "sSizyouC": "00",
-        })
+        # sleepを0.05秒に短縮（秒20件ペース）
+        # エラー時は0.3秒待ってリトライ1回
+        for attempt in range(2):
+            body = sess.price({
+                "sCLMID": "CLMMfdsGetMarketPriceHistory",
+                "sIssueCode": str(code).strip(), "sSizyouC": "00",
+            })
+            if body.get("p_errno", "-1") == "0":
+                break
+            time.sleep(0.3)  # レート超過時は少し待つ
+
         if body.get("p_errno", "-1") != "0":
             result[code] = None
         else:
@@ -314,7 +321,7 @@ def fetch_daily_for_codes(sess, codes, debug=False):
             else:
                 result[code] = None
         prog.progress((i+1)/len(codes), text=f"{code} ({i+1}/{len(codes)})")
-        time.sleep(0.15)
+        time.sleep(0.05)  # 0.15→0.05秒（秒20件ペース）
     prog.empty()
     return result
 
